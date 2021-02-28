@@ -87,6 +87,35 @@ goog.mixin(goog.global['anychart']['themes']['defaultTheme'], {
         'position': 'auto',
         'anchor': 'auto'
       }
+    },
+    'totals': {
+      'name': 'Total',
+      'width': '55%',
+      'normal': {
+        'fill': anychart.core.defaultTheme.waterfallTotalFill,
+        'stroke': anychart.core.defaultTheme.waterfallTotalStroke,
+        'label': {
+          'anchor': 'auto',
+          'position': 'auto',
+          'format': '{%value}',
+          'enabled': true
+        }
+      },
+      'hovered': {
+        'fill': anychart.core.defaultTheme.returnSourceColor65,
+        'stroke': anychart.core.defaultTheme.returnSourceColor65,
+        'label': {
+          'anchor': 'auto',
+          'position': 'auto',
+          'format': '{%value}',
+          'enabled': true
+        }
+      },
+      'tooltip': {
+        'enabled': true,
+        'format': '{%value}',
+        'titleFormat': '{%name}'
+      }
     }
   }
 });

@@ -8,7 +8,7 @@ goog.require('anychart.enums');
 goog.require('anychart.format.Context');
 goog.require('anychart.waterfallModule.Connectors');
 goog.require('anychart.waterfallModule.Series');
-
+goog.require('anychart.waterfallModule.totals.Storage');
 
 
 /**
@@ -26,6 +26,8 @@ anychart.waterfallModule.Chart = function() {
   this.addThemes('waterfall');
 
   this.setType(anychart.enums.ChartTypes.WATERFALL);
+
+  this.totalsStorage = new anychart.waterfallModule.totals.Storage(this);
 
   /**
    * Contains pairs of coordinates, which represent start
@@ -60,8 +62,22 @@ anychart.waterfallModule.Chart = function() {
   this.usedContextsPool_ = [];
 
   anychart.core.settings.createDescriptorsMeta(this.descriptorsMeta, [
-    ['dataMode', anychart.ConsistencyState.SERIES_CHART_SERIES | anychart.ConsistencyState.SCALE_CHART_SCALES | anychart.ConsistencyState.SCALE_CHART_Y_SCALES, anychart.Signal.NEEDS_REDRAW]
+    ['dataMode',
+      anychart.ConsistencyState.SERIES_CHART_SERIES |
+      anychart.ConsistencyState.SCALE_CHART_SCALES |
+      anychart.ConsistencyState.SCALE_CHART_Y_SCALES,
+      anychart.Signal.NEEDS_REDRAW,
+      void 0,
+      /**
+       * @this {anychart.waterfallModule.Chart}
+       */
+      function() {
+        this.invalidateState(anychart.enums.Store.WATERFALL, anychart.waterfallModule.Chart.SUPPORTED_STATES.TOTALS);
+      }
+    ]
   ]);
+
+  this.setupTotalsStorage_();
 };
 goog.inherits(anychart.waterfallModule.Chart, anychart.core.CartesianBase);
 
@@ -81,8 +97,9 @@ anychart.waterfallModule.Chart.ZINDEX_CONNECTORS_LABELS = anychart.core.ChartWit
  * @enum {string}
  */
 anychart.waterfallModule.Chart.SUPPORTED_STATES = {
+  CONNECTORS_LABELS: 'connectorsLabels',
   STACK_LABELS: 'stackLabels',
-  CONNECTORS_LABELS: 'connectorsLabels'
+  TOTALS: 'totals'
 };
 
 
@@ -90,8 +107,9 @@ anychart.consistency.supportStates(
     anychart.waterfallModule.Chart,
     anychart.enums.Store.WATERFALL,
     [
-     anychart.waterfallModule.Chart.SUPPORTED_STATES.STACK_LABELS,
-     anychart.waterfallModule.Chart.SUPPORTED_STATES.CONNECTORS_LABELS
+      anychart.waterfallModule.Chart.SUPPORTED_STATES.CONNECTORS_LABELS,
+      anychart.waterfallModule.Chart.SUPPORTED_STATES.STACK_LABELS,
+      anychart.waterfallModule.Chart.SUPPORTED_STATES.TOTALS
     ]
 );
 
@@ -193,6 +211,7 @@ anychart.waterfallModule.Chart.prototype.drawContent = function(contentBounds) {
   anychart.waterfallModule.Chart.base(this, 'drawContent', contentBounds);
 
   this.drawLabels();
+  this.drawTotals();
 };
 
 
@@ -792,11 +811,11 @@ anychart.waterfallModule.Chart.prototype.drawLabels = function() {
   this.drawConnectorsLabels();
 
   this.markMultiStateConsistent(
-      anychart.enums.Store.WATERFALL,
-      [
-        anychart.waterfallModule.Chart.SUPPORTED_STATES.STACK_LABELS,
-        anychart.waterfallModule.Chart.SUPPORTED_STATES.CONNECTORS_LABELS
-      ]
+    anychart.enums.Store.WATERFALL,
+    [
+      anychart.waterfallModule.Chart.SUPPORTED_STATES.STACK_LABELS,
+      anychart.waterfallModule.Chart.SUPPORTED_STATES.CONNECTORS_LABELS
+    ]
   );
 };
 
@@ -849,6 +868,7 @@ anychart.waterfallModule.Chart.prototype.createLegendItemsProvider = function(so
    * @type {!Array.<anychart.core.ui.Legend.LegendItemProvider>}
    */
   var data = [];
+  var totalsCount = this.getAllTotals().length;
   if (sourceMode == anychart.enums.LegendItemsSourceMode.CATEGORIES) {
     this.keyToSeriesMap_ = {};
     var seriesList = this.getAllSeries();
@@ -904,30 +924,37 @@ anychart.waterfallModule.Chart.prototype.createLegendItemsProvider = function(so
         this.keyToSeriesMap_[seen[fallingFillHash]].series.push(series);
       }
 
-      resolver = anychart.color.getColorResolver('fill', anychart.enums.ColorType.FILL, false);
-      totalFill = resolver(series, anychart.PointState.NORMAL, true, true);
-      totalFillHash = anychart.utils.hash(totalFill);
-      if (!(totalFillHash in seen)) {
-        seen[totalFillHash] = legendItemKey;
-        this.keyToSeriesMap_[legendItemKey] = {
-          series: [series],
-          type: 'total'
-        };
-        data.push({
-          'text': 'Total',
-          'categoryType': 'total',
-          'iconEnabled': true,
-          'iconFill': /** @type {acgraph.vector.Fill} */ (totalFill),
-          'sourceUid': goog.getUid(this),
-          'sourceKey': legendItemKey++
-        });
-      } else {
-        this.keyToSeriesMap_[seen[totalFillHash]].series.push(series);
+      if (!totalsCount) {
+        resolver = anychart.color.getColorResolver('fill', anychart.enums.ColorType.FILL, false);
+        totalFill = resolver(series, anychart.PointState.NORMAL, true, true);
+        totalFillHash = anychart.utils.hash(totalFill);
+        if (!(totalFillHash in seen)) {
+          seen[totalFillHash] = legendItemKey;
+          this.keyToSeriesMap_[legendItemKey] = {
+            series: [series],
+            type: 'total'
+          };
+          data.push({
+            'text': 'Total',
+            'categoryType': 'total',
+            'iconEnabled': true,
+            'iconFill': /** @type {acgraph.vector.Fill} */ (totalFill),
+            'sourceUid': goog.getUid(this),
+            'sourceKey': legendItemKey++
+          });
+        } else {
+          this.keyToSeriesMap_[seen[totalFillHash]].series.push(series);
+        }
       }
     }
   } else {
     data = anychart.waterfallModule.Chart.base(this, 'createLegendItemsProvider', sourceMode, itemsFormat);
   }
+
+  if (this.getAllTotals().length) {
+    // data.push(this.totalsStorage.getLegendItem());
+  }
+
   return data;
 };
 
@@ -1037,8 +1064,8 @@ anychart.waterfallModule.Chart.prototype.getStackSum = function(index, metaField
       if (iterator.meta('missing')) return sum;
 
       var value = opt_treatDiffAsAbsForTotal ?
-          this.getPointStackingValue(iterator.getCurrentPoint()) :
-          iterator.meta(metaFieldName);
+        this.getPointStackingValue(iterator.getCurrentPoint()) :
+        iterator.meta(metaFieldName);
 
       return sum + value;
     }
@@ -1057,7 +1084,9 @@ anychart.waterfallModule.Chart.prototype.getStackSum = function(index, metaField
  * @return {boolean}
  */
 anychart.waterfallModule.Chart.prototype.isStackVisible = function(index) {
-  return goog.array.reduce(this.drawingPlans, function(isVisible, plan) {
+  // First plan used for totals drawing.
+  var seriesPlans = this.drawingPlans.slice(1);
+  return goog.array.reduce(seriesPlans, function(isVisible, plan) {
     return isVisible || !plan.data[index].meta['missing'];
   }, false);
 };
@@ -1119,7 +1148,10 @@ anychart.waterfallModule.Chart.prototype.getStackBottom = function(index) {
 //region --- Series
 /** @inheritDoc */
 anychart.waterfallModule.Chart.prototype.seriesInvalidated = function(event) {
-  this.invalidateState(anychart.enums.Store.WATERFALL, anychart.waterfallModule.Chart.SUPPORTED_STATES.STACK_LABELS);
+  this.invalidateMultiState(anychart.enums.Store.WATERFALL, [
+    anychart.waterfallModule.Chart.SUPPORTED_STATES.STACK_LABELS,
+    anychart.waterfallModule.Chart.SUPPORTED_STATES.TOTALS
+  ], anychart.Signal.NEEDS_REDRAW);
 
   anychart.waterfallModule.Chart.base(this, 'seriesInvalidated', event);
 };
@@ -1219,6 +1251,185 @@ anychart.waterfallModule.Chart.prototype.getConnectorBounds = function(index) {
 
 
 //endregion
+//region --- Totals
+anychart.waterfallModule.Chart.prototype.getTotalValue = function(category) {
+  var index = this.xScale().getIndexByValue(category);
+  return goog.array.reduce(this.drawingPlans, function(totalValue, plan) {
+    var seriesData = plan.data.slice(0, index);
+    return totalValue + goog.array.reduce(seriesData, function(sum, point) {
+      var value = this.getPointStackingValue(point);
+
+      return sum + (goog.isNumber(value) ? value : 0);
+    }, 0, this);
+  }, 0, this);
+};
+
+
+/**
+ * Create Total instance, setup it by passed config and return it.
+ *
+ * @param {anychart.waterfallModule.totals.Total.Config} config - Configuration object for total.
+ *
+ * @return {anychart.waterfallModule.totals.Total} - Total instance.
+ */
+anychart.waterfallModule.Chart.prototype.addTotal = function(config) {
+  return this.totalsStorage.addTotal(config);
+};
+
+
+/**
+ * Remove total instance.
+ *
+ * @param {anychart.waterfallModule.totals.Total} totalToRemove - Instance of total to remove.
+ * @return {boolean} - 'true' if total removed successfully 'false' otherwise.
+ */
+anychart.waterfallModule.Chart.prototype.removeTotal = function(totalToRemove) {
+  return this.totalsStorage.removeTotal(totalToRemove);
+};
+
+
+/**
+ * Remove total by index.
+ *
+ * @param {number} indexToRemove - Index of total to remove.
+ * @return {boolean} - 'true' if total removed successfully 'false' otherwise.
+ */
+anychart.waterfallModule.Chart.prototype.removeTotalAt = function(indexToRemove) {
+  return this.totalsStorage.removeTotalAt(indexToRemove);
+};
+
+
+/**
+ * Return total by index.
+ *
+ * @param {number} index - Index of total.
+ * @return {anychart.waterfallModule.totals.Total} - Total instance or 'null' if has no total.
+ */
+anychart.waterfallModule.Chart.prototype.getTotalAt = function(index) {
+  return this.totalsStorage.getTotalAt(index);
+};
+
+
+/**
+ * Return array of totals.
+ *
+ * @return {Array.<anychart.waterfallModule.totals.Total>} - Array of all totals.
+ */
+anychart.waterfallModule.Chart.prototype.getAllTotals = function() {
+  return this.totalsStorage.getAllTotals();
+};
+
+
+/**
+ * Totals storage invalidate handler.
+ */
+anychart.waterfallModule.Chart.prototype.totalsStorageInvalidated = function() {
+  this.invalidateState(anychart.enums.Store.WATERFALL, anychart.waterfallModule.Chart.SUPPORTED_STATES.TOTALS);
+
+  var stateToInvalidate =
+    anychart.ConsistencyState.APPEARANCE |
+    anychart.ConsistencyState.SERIES_DATA |
+    anychart.ConsistencyState.SERIES_CHART_SERIES |
+    anychart.ConsistencyState.SCALE_CHART_SCALES |
+    anychart.ConsistencyState.SCALE_CHART_SCALE_MAPS |
+    anychart.ConsistencyState.SCALE_CHART_Y_SCALES |
+    anychart.ConsistencyState.SCALE_CHART_STATISTICS;
+
+  this.invalidate(stateToInvalidate, anychart.Signal.NEEDS_REDRAW);
+};
+
+anychart.waterfallModule.Chart.prototype.setupTotalsStorage_ = function() {
+  this.totalsStorage.listenSignals(this.totalsStorageInvalidated, this);
+};
+
+anychart.waterfallModule.Chart.prototype.drawTotals = function() {
+  this.totalsStorage.container(this.rootElement);
+
+  this.totalsStorage.parentBounds(this.dataBounds);
+  this.totalsStorage.draw();
+  this.markStateConsistent(anychart.enums.Store.WATERFALL, anychart.waterfallModule.Chart.SUPPORTED_STATES.TOTALS);
+};
+
+anychart.waterfallModule.Chart.prototype.updateTotalsStorage = function() {
+  // if (this.hasStateInvalidation(anychart.enums.Store.WATERFALL, anychart.waterfallModule.Chart.SUPPORTED_STATES.TOTALS)) {
+  //   var seriesWithData = goog.array.filter(this.seriesList, function(series) {
+  //     return !!(series && series.enabled() && series.data());
+  //   });
+  //
+  //   var datasets = goog.array.map(seriesWithData, function(series) {
+  //     return series.data();
+  //   });
+  //
+  //   this.totalsStorage.setDatasets(datasets);
+  //
+  //   this.totalsStorage.calculate(this.getOption('dataMode'));
+  // }
+};
+
+
+//endregion
+//region --- Overrides
+/** @inheritDoc */
+anychart.waterfallModule.Chart.prototype.changeItemsLayout = function() {
+  anychart.waterfallModule.Chart.base(this, 'changeItemsLayout');
+  this.totalsStorage.getSeries().isVertical(this.isVerticalInternal);
+};
+
+
+/** @inheritDoc */
+anychart.waterfallModule.Chart.prototype.xScaleInvalidated = function(scale) {
+  this.invalidateState(anychart.enums.Store.WATERFALL, anychart.waterfallModule.Chart.SUPPORTED_STATES.TOTALS);
+  anychart.waterfallModule.Chart.base(this, 'xScaleInvalidated', scale);
+};
+
+
+/** @inheritDoc */
+anychart.waterfallModule.Chart.prototype.yScaleInvalidated = function(scale) {
+  this.invalidateState(anychart.enums.Store.WATERFALL, anychart.waterfallModule.Chart.SUPPORTED_STATES.TOTALS);
+  anychart.waterfallModule.Chart.base(this, 'yScaleInvalidated', scale);
+};
+
+
+/** @inheritDoc */
+anychart.waterfallModule.Chart.prototype.getAutoNamesForXScale = function(field, drawingPlans) {
+  var autoNames = anychart.waterfallModule.Chart.base(this, 'getAutoNamesForXScale', field, drawingPlans);
+
+  var planData = drawingPlans[0].data;
+  goog.array.forEach(planData, function(point, index) {
+    var totalInstance = point.data['totalInstance'];
+    if (totalInstance) {
+      autoNames[index] = totalInstance.getOption('name');
+    }
+  });
+
+  return autoNames;
+};
+
+/** @inheritDoc */
+anychart.waterfallModule.Chart.prototype.getScaleAutoValues = function(drawingPlans, excludes) {
+  var value = anychart.waterfallModule.Chart.base(this, 'getScaleAutoValues', drawingPlans, excludes);
+
+  var xArray = this.totalsStorage.populateByTotals(value.xArray);
+
+  var xHashMap = goog.array.reduce(xArray, function(map, xValue, index) {
+    map[anychart.utils.hash(xValue)] = index;
+    return map;
+  }, {});
+
+  return {
+    xArray: xArray,
+    xHashMap: xHashMap
+  };
+};
+
+
+/** @inheritDoc */
+anychart.waterfallModule.Chart.prototype.calculate = function() {
+  // this.updateTotalsStorage();
+
+  anychart.waterfallModule.Chart.base(this, 'calculate');
+};
+//endregion
 //region --- setup/dispose
 /** @inheritDoc */
 anychart.waterfallModule.Chart.prototype.serialize = function() {
@@ -1226,6 +1437,7 @@ anychart.waterfallModule.Chart.prototype.serialize = function() {
   anychart.core.settings.serialize(this, anychart.waterfallModule.Chart.PROPERTY_DESCRIPTORS, json['chart']);
   json['chart']['stackLabels'] = this.stackLabels().serialize();
   json['chart']['connectors'] = this.connectors().serialize();
+  json['chart']['totals'] = this.totalsStorage.serialize();
 
   return json;
 };
@@ -1278,6 +1490,11 @@ anychart.waterfallModule.Chart.prototype.disposeInternal = function() {
   //proto['waterfall'] = proto.waterfall;
   //proto['dataMode'] = proto.dataMode;
 
+  proto['addTotal'] = proto.addTotal;
+  proto['removeTotal'] = proto.removeTotal;
+  proto['removeTotalAt'] = proto.removeTotalAt;
+  proto['getTotalAt'] = proto.getTotalAt;
+  proto['getAllTotals'] = proto.getAllTotals;
   proto['stackLabels'] = proto.stackLabels;
   proto['xScale'] = proto.xScale;
   proto['yScale'] = proto.yScale;

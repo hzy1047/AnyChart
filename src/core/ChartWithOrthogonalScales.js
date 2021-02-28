@@ -423,34 +423,92 @@ anychart.core.ChartWithOrthogonalScales.prototype.applyComplexZoom = function() 
 
 
 /**
+ * Returns object with chart series scales.
+ * @return {Object}
+ */
+anychart.core.ChartWithOrthogonalScales.prototype.getUsedXScales = function() {
+  var i, series;
+  var seriesCount = this.seriesList.length;
+
+  var scales = {};
+  for (i = 0; i < seriesCount; i++) {
+    series = this.seriesList[i];
+    if (series) {
+      var scale = /** @type {anychart.scales.Base} */(series.xScale());
+      var uid = goog.getUid(scale);
+      scales[uid] = scale;
+    }
+  }
+
+  return scales;
+};
+
+
+/**
+ * Returns object with chart series scales.
+ * @return {Object}
+ */
+anychart.core.ChartWithOrthogonalScales.prototype.getUsedYScales = function () {
+  var i, series;
+  var seriesCount = this.seriesList.length;
+
+  var scales = {};
+  for (i = 0; i < seriesCount; i++) {
+    series = this.seriesList[i];
+    if (series) {
+      var scale = /** @type {anychart.scales.Base} */(series.yScale());
+      var uid = goog.getUid(scale);
+      scales[uid] = scale;
+    }
+  }
+
+  return scales;
+};
+
+
+/**
+ * Check if passed object contains new scales instances which chart do not contain.
+ * @param {Object} newScales - Object with scales.
+ * @return {boolean}
+ */
+anychart.core.ChartWithOrthogonalScales.prototype.hasNewXScales = function(newScales) {
+  return goog.object.some(newScales, function(scale) {
+    var uid = goog.getUid(scale);
+    return !(uid in this.xScales);
+  }, this);
+};
+
+
+/**
+ * Check if passed object contains new scales instances which chart do not contain.
+ * @param {Object} newScales - Object with scales.
+ * @return {boolean}
+ */
+anychart.core.ChartWithOrthogonalScales.prototype.hasNewYScales = function(newScales) {
+  return goog.object.some(newScales, function(scale) {
+    var uid = goog.getUid(scale);
+    return !(uid in this.yScales);
+  }, this);
+};
+
+
+/**
  * @protected
  */
 anychart.core.ChartWithOrthogonalScales.prototype.makeScaleMaps = function() {
   if (this.hasInvalidationState(anychart.ConsistencyState.SCALE_CHART_SCALE_MAPS)) {
     anychart.performance.start('Scale maps gathering');
     anychart.core.Base.suspendSignalsDispatching(this.seriesList);
-    var i, series;
     var seriesCount = this.seriesList.length;
-    var changed = !seriesCount;
-    var xScales = {};
-    var yScales = {};
-    for (i = 0; i < seriesCount; i++) {
-      series = this.seriesList[i];
-      if (series) {
-        var scale = /** @type {anychart.scales.Base} */(series.xScale());
-        var uid = goog.getUid(scale);
-        xScales[uid] = scale;
-        if (!(uid in this.xScales))
-          changed = true;
-        scale = /** @type {anychart.scales.Base} */(series.yScale());
-        uid = goog.getUid(scale);
-        yScales[uid] = scale;
-        if (!(uid in this.yScales))
-          changed = true;
-      }
-    }
-    this.yScales = yScales;
-    this.xScales = xScales;
+
+    var usedXScales = this.getUsedXScales();
+    var usedYScales = this.getUsedYScales();
+
+    var changed = !seriesCount || this.hasNewXScales(usedXScales) || this.hasNewYScales(usedYScales);
+
+    this.yScales = usedYScales;
+    this.xScales = usedXScales;
+
     if (changed) {
       this.invalidateAnnotations();
       this.invalidate(
@@ -475,52 +533,106 @@ anychart.core.ChartWithOrthogonalScales.prototype.makeScaleMaps = function() {
  * @param {Object} excludesMap
  */
 anychart.core.ChartWithOrthogonalScales.prototype.autoCalcOrdinalXScale = function(xScale, drawingPlans, hasExcludes, excludesMap) {
-  var i, xHashMap, xArray;
-  var drawingPlan = drawingPlans[0];
-  if (hasExcludes) {
-    xHashMap = {};
-    xArray = [];
-    for (i = 0; i < drawingPlan.data.length; i++) {
-      if (!(i in excludesMap)) {
-        var xValue = drawingPlan.data[i].data['x'];
-        xHashMap[anychart.utils.hash(xValue)] = xArray.length;
-        xArray.push(xValue);
-      }
-    }
-  } else {
-    xHashMap = drawingPlan.xHashMap;
-    xArray = drawingPlan.xArray;
-  }
-  xScale.setAutoValues(xHashMap, xArray);
+  var value = this.getScaleAutoValues(drawingPlans, excludesMap);
+
+  xScale.setAutoValues(value.xHashMap, value.xArray);
 };
 
+/**
+ * Extract array of x values and hash map for it from drawingPlans.
+ *
+ * @param {Array.<Object>} drawingPlans
+ * @param {Object} excludes - Object with excluded values.
+ */
+anychart.core.ChartWithOrthogonalScales.prototype.getScaleAutoValues = function (drawingPlans, excludes) {
+  var drawingPlan = drawingPlans[0];
+
+  var xValues = goog.array.map(drawingPlan.data, function (point) {
+    return point.data['x'];
+  });
+
+  var xArray = goog.array.filter(xValues, function (xValue) {
+    return !goog.object.containsKey(excludes, xValue);
+  });
+
+  var xHashMap = goog.array.reduce(xArray, function (map, xValue, index) {
+    map[anychart.utils.hash(xValue)] = index;
+    return map;
+  }, {});
+
+  return {
+    xArray: xArray,
+    xHashMap: xHashMap
+  }
+};
 
 /**
- * Finish ordinal x scale calculation.
- * Calculates auto names, depends on from-data-field for ordinal scale.
- * @param {anychart.scales.Ordinal} xScale
- * @param {Array.<Object>} drawingPlans
+ * Returns array of auto names that must be taken from data by specified field.
+ *
+ * @param {string?} field - Name of field that contain name.
+ * @param {Array.<Object>} drawingPlans - Drawing plans.
+ * @return {Array.<string>}
  */
-anychart.core.ChartWithOrthogonalScales.prototype.finishOrdinalXScaleCalculation = function(xScale, drawingPlans) {
+anychart.core.ChartWithOrthogonalScales.prototype.getAutoNamesForXScale = function(field, drawingPlans) {
   var i, j, val;
-  var namesField = xScale.getNamesField();
+  var remainingNames = drawingPlans[0].xArray.length;
+  var autoNames = new Array(remainingNames);
   // retrieving names
-  if (namesField) {
-    var remainingNames = drawingPlans[0].xArray.length;
-    var autoNames = new Array(remainingNames);
+  if (field) {
     for (i = 0; i < drawingPlans.length; i++) {
       var drawingPlanData = drawingPlans[i].data;
       if (remainingNames > 0) {
         for (j = 0; j < drawingPlanData.length; j++) {
-          if (!goog.isDef(autoNames[j]) && goog.isDef(val = drawingPlanData[j].data[namesField])) {
+          if (!goog.isDef(autoNames[j]) && goog.isDef(val = drawingPlanData[j].data[field])) {
             autoNames[j] = val;
             remainingNames--;
           }
         }
       }
     }
+  }
+
+  return autoNames;
+};
+
+
+/**
+ * Set names for x scale.
+ *
+ * @param {Array.<string>} autoNames - Array with names.
+ * @param {anychart.scales.Ordinal} xScale - Ordinal scale for names setup.
+ */
+anychart.core.ChartWithOrthogonalScales.prototype.setAutoNamesForXScale = function(autoNames, xScale) {
+  var hasItems = goog.array.some(autoNames, function(name) {
+    return goog.isDef(name);
+  });
+
+  if (hasItems) {
     xScale.setAutoNames(autoNames);
   }
+};
+
+
+/**
+ * Finish ordinal x scale calculation.
+ * Calculates auto names, depends on from-data-field for ordinal scale.
+ *
+ * @param {anychart.scales.Ordinal} xScale
+ * @param {Array.<Object>} drawingPlans
+ */
+anychart.core.ChartWithOrthogonalScales.prototype.finishOrdinalXScaleCalculation = function(xScale, drawingPlans) {
+  var autoNames = this.getAutoNamesForXScale(xScale.getNamesField(), drawingPlans);
+  this.setAutoNamesForXScale(autoNames, xScale);
+};
+
+
+/**
+ * Returns array of scale dependent elements.
+ *
+ * @return {!Array<anychart.core.series.Cartesian>}
+ */
+anychart.core.ChartWithOrthogonalScales.prototype.getDrawableWithScales = function() {
+  return this.seriesList;
 };
 
 
@@ -530,9 +642,8 @@ anychart.core.ChartWithOrthogonalScales.prototype.finishOrdinalXScaleCalculation
 anychart.core.ChartWithOrthogonalScales.prototype.calculateXScales = function() {
   if (this.hasInvalidationState(anychart.ConsistencyState.SCALE_CHART_SCALES)) {
     anychart.performance.start('X scales and drawing plan calculation');
-    var i, j, series;
+    var i, j, drawableWithScale;
     var xScale;
-    var seriesCount = this.seriesList.length;
     var drawingPlan, drawingPlans, drawingPlansByYScale, uid, point, val;
     this.drawingPlans = [];
     this.drawingPlansByXScale = {};
@@ -547,10 +658,12 @@ anychart.core.ChartWithOrthogonalScales.prototype.calculateXScales = function() 
       if (xScale.needsAutoCalc())
         xScale.startAutoCalc();
     }
-    for (i = 0; i < seriesCount; i++) {
-      series = /** @type {anychart.core.series.Cartesian} */(this.seriesList[i]);
-      if (!series || !series.enabled()) continue;
-      xScale = /** @type {anychart.scales.Base} */(series.xScale());
+
+    var drawableWithScales = this.getDrawableWithScales();
+    for (i = 0; i < drawableWithScales.length; i++) {
+      drawableWithScale = drawableWithScales[i];
+      if (!drawableWithScale || !drawableWithScale.enabled()) continue;
+      xScale = /** @type {anychart.scales.Base} */(drawableWithScale.xScale());
       uid = goog.getUid(xScale);
       drawingPlans = this.drawingPlansByXScale[uid];
       if (!drawingPlans)
@@ -571,16 +684,16 @@ anychart.core.ChartWithOrthogonalScales.prototype.calculateXScales = function() 
             xHashMap = {};
           }
         }
-        drawingPlan = series.getOrdinalDrawingPlan(xHashMap, xArray, restricted);
+        drawingPlan = drawableWithScale.getOrdinalDrawingPlan(xHashMap, xArray, restricted);
       } else {
-        drawingPlan = series.getScatterDrawingPlan(true, anychart.utils.instanceOf(xScale, anychart.scales.DateTime));
+        drawingPlan = drawableWithScale.getScatterDrawingPlan(true, anychart.utils.instanceOf(xScale, anychart.scales.DateTime));
       }
       drawingPlans.push(drawingPlan);
       this.drawingPlans.push(drawingPlan);
       drawingPlansByYScale = this.drawingPlansByYAndXScale_[uid];
       if (!drawingPlansByYScale)
         this.drawingPlansByYAndXScale_[uid] = drawingPlansByYScale = {};
-      uid = goog.getUid(series.yScale());
+      uid = goog.getUid(drawableWithScale.yScale());
       drawingPlans = drawingPlansByYScale[uid];
       if (!drawingPlans)
         drawingPlansByYScale[uid] = drawingPlans = [];
@@ -705,8 +818,8 @@ anychart.core.ChartWithOrthogonalScales.prototype.calculateXScales = function() 
       var excludesMap = {};
       for (i = 0; i < drawingPlans.length; i++) {
         drawingPlan = drawingPlans[i];
-        series = /** @type {anychart.core.series.Cartesian} */(drawingPlan.series);
-        var seriesExcludes = series.getExcludedIndexesInternal();
+        drawableWithScale = /** @type {anychart.core.series.Cartesian} */(drawingPlan.series);
+        var seriesExcludes = drawableWithScale.getExcludedIndexesInternal();
         if (seriesExcludes.length) {
           hasExcludes = true;
           for (j = 0; j < seriesExcludes.length; j++) {
